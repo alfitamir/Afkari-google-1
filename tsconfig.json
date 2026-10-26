@@ -1,0 +1,68 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "types": ["vite/client"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "server.ts"
+  ],
+  "exclude": [
+    "dist",
+    "**/*.test.*",
+    "src/test",
+    "src/server.ts",
+    "src/start.ts",
+    "src/routes/api",
+    "src/integrations/supabase/auth-attacher.ts",
+    "src/integrations/supabase/auth-middleware.ts",
+    "src/lib/article-ai.server.ts",
+    "src/components/ui/alert-dialog.tsx",
+    "src/components/ui/aspect-ratio.tsx",
+    "src/components/ui/avatar.tsx",
+    "src/components/ui/calendar.tsx",
+    "src/components/ui/carousel.tsx",
+    "src/components/ui/chart.tsx",
+    "src/components/ui/checkbox.tsx",
+    "src/components/ui/command.tsx",
+    "src/components/ui/context-menu.tsx",
+    "src/components/ui/drawer.tsx",
+    "src/components/ui/dropdown-menu.tsx",
+    "src/components/ui/form.tsx",
+    "src/components/ui/hover-card.tsx",
+    "src/components/ui/input-otp.tsx",
+    "src/components/ui/menubar.tsx",
+    "src/components/ui/navigation-menu.tsx",
+    "src/components/ui/popover.tsx",
+    "src/components/ui/progress.tsx",
+    "src/components/ui/radio-group.tsx",
+    "src/components/ui/resizable.tsx",
+    "src/components/ui/scroll-area.tsx",
+    "src/components/ui/select.tsx",
+    "src/components/ui/slider.tsx",
+    "src/components/ui/switch.tsx",
+    "src/components/ui/tabs.tsx",
+    "src/components/ui/toggle-group.tsx"
+  ]
+}

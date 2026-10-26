@@ -1,0 +1,6 @@
+{
+  "name": "App Builder Workspace",
+  "description": "Upload, paste, and modify your code with an interactive development workbench.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
