@@ -9,6 +9,11 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { parseImprovedArticle } from './src/lib/article-ai';
+import {
+  ASK_INSTRUCTIONS, ASK_SCHEMA, CLASSIFY_INSTRUCTIONS, CLASSIFY_SCHEMA, INSIGHTS_INSTRUCTIONS, INSIGHTS_SCHEMA,
+  TRANSCRIBE_INSTRUCTIONS, sanitizeAsk, sanitizeInsights, sanitizeLabels,
+} from './src/lib/ai-prompts';
+import { classify } from './src/lib/topics';
 
 dotenv.config();
 
@@ -21,6 +26,16 @@ const PORT = 3000;
 app.use(express.json({ limit: '10mb' }));
 
 const MAX_BODY_CHARS = 200_000;
+// Override with GEMINI_MODEL if the default is unavailable for your key.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const MAX_AUDIO_BASE64 = 9_000_000; // ~6.5MB of audio, under the 10mb JSON limit
+// Fail fast with a message the user can act on instead of an opaque credentials error from the SDK.
+app.use('/api/gemini', (req: Request, res: Response, next) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: 'خادم التطبيق غير مهيأ بمفتاح Gemini. أضف مفتاحك الشخصي من الإعدادات ⚙️ لتفعيل الذكاء الاصطناعي.' });
+  }
+  next();
+});
 app.get('/api/health', (_req, res) => res.json({ ok: true, gemini: Boolean(process.env.GEMINI_API_KEY) }));
 
 // Server-side Google Gemini client
@@ -95,7 +110,7 @@ app.post('/api/gemini/polish', async (req: Request, res: Response) => {
     const prompt = `المقال الحالي المراد تحسينه وضبطه:\nالعنوان: ${title || 'بدون عنوان'}\n\nالنص:\n${body}\n\nالنص الأصلي المسجل:\n${original || body}\n\nعينات من أسلوب الكاتب للاسترشاد بنبرته ومفرداته:\n${(samples || []).join('\n---\n')}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: MODEL,
       contents: prompt,
       config: {
         systemInstruction: STYLE_INSTRUCTIONS,
@@ -127,7 +142,7 @@ app.post('/api/gemini/suggest-merges', async (req: Request, res: Response) => {
     const prompt = `اقرأ قائمة المقالات التالية واقترح مجموعات من مقالين أو أكثر تتناول نفس القضية الفكرية أو الاجتماعية أو السياسية بحيث يكون دمجها في مقال تركيبي واحداً مفيداً ومثرياً:\n\n${JSON.stringify(payload)}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: MODEL,
       contents: prompt,
       config: {
         systemInstruction: `أنت مساعد فكري يرتب مقالات كاتب واحد. اقرأ قائمة المقالات واقترح مجموعات من مقالين أو أكثر تتناول الموضوع نفسه بحيث يكون دمجها في مقال واحد مفيداً. أعد قائمة JSON تحوي مصفوفة من المجموعات. كل مجموعة تحوي: ids (مصفوفة معرفات المقالات)، title (عنوان مقترح قصير للمقال المدمج)، reason (سبب قصير جداً للدمج). إن لم توجد مقالات متقاربة أعد مصفوفة فارغة.`,
@@ -178,7 +193,7 @@ app.post('/api/gemini/merge', async (req: Request, res: Response) => {
       .join('\n\n')}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: MODEL,
       contents: prompt,
       config: {
         systemInstruction: MERGE_INSTRUCTIONS,
@@ -203,7 +218,7 @@ app.post('/api/gemini/suggest-additions', async (req: Request, res: Response) =>
     const prompt = `بناءً على المقال التالي للكاتب، اقترح إضافات فكرية واقتباسات ملهمة لتعميق المقال:\nالعنوان: ${title}\n\nالنص:\n${body}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: MODEL,
       contents: prompt,
       config: {
         systemInstruction: `أنت مستشار فكري وتحريري خبير بأسلوب الكاتب وقضاياه (الدولة والمجتمع، المنظومة، المقاومة، الفكر الإسلامي الحضاري، كتابات المسيري ومالك بن نبي وابن خلدون وسيد قطب ومحمود شاكر).
@@ -251,6 +266,81 @@ app.post('/api/gemini/suggest-additions', async (req: Request, res: Response) =>
     console.error('Error suggesting additions:', error);
     return res.status(500).json({ error: error?.message || 'تعذّر توليد الاقتراحات عبر Gemini' });
   }
+});
+
+// ---- AI features ----------------------------------------------------------
+
+const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n);
+const fail = (res: Response, label: string, error: any) => {
+  console.error(`Error in ${label}:`, error);
+  return res.status(500).json({ error: error?.message || `تعذّر تنفيذ العملية عبر Gemini (${label})` });
+};
+
+// 5. Transcribe a voice recording (more reliable than the browser's speech recognition)
+app.post('/api/gemini/transcribe', async (req: Request, res: Response) => {
+  try {
+    const { mimeType, data } = req.body ?? {};
+    if (typeof data !== 'string' || !data || typeof mimeType !== 'string' || !/^audio\//.test(mimeType)) {
+      return res.status(400).json({ error: 'تسجيل صوتي صالح مطلوب' });
+    }
+    if (data.length > MAX_AUDIO_BASE64) {
+      return res.status(413).json({ error: 'التسجيل أطول من الحد المسموح، قسّمه إلى تسجيلين.' });
+    }
+    const response = await ai.models.generateContent({
+      model: MODEL,
+      contents: [{ role: 'user', parts: [{ inlineData: { mimeType: mimeType.split(';')[0], data } }, { text: 'فرّغ هذا التسجيل.' }] }],
+      config: { systemInstruction: TRANSCRIBE_INSTRUCTIONS },
+    });
+    return res.json({ text: (response.text || '').trim() });
+  } catch (error) { return fail(res, 'transcribe', error); }
+});
+
+// 6. Answer a question from the author's own articles
+app.post('/api/gemini/ask', async (req: Request, res: Response) => {
+  try {
+    const { question, articles } = req.body ?? {};
+    if (typeof question !== 'string' || !question.trim()) return res.status(400).json({ error: 'السؤال مطلوب' });
+    if (!Array.isArray(articles) || !articles.length) return res.status(400).json({ error: 'لا مقالات للبحث فيها' });
+    const list = articles.slice(0, 20).map((a: any) => ({ id: clip(a?.id, 80), title: clip(a?.title, 200), excerpt: clip(a?.excerpt, 2000) }));
+    const response = await ai.models.generateContent({
+      model: MODEL,
+      contents: `السؤال: ${clip(question, 1000)}\n\nالمقالات:\n${JSON.stringify(list)}`,
+      config: { systemInstruction: ASK_INSTRUCTIONS, responseMimeType: 'application/json', responseSchema: ASK_SCHEMA as any },
+    });
+    return res.json(sanitizeAsk(JSON.parse(response.text || '{}'), new Set(list.map((a) => a.id))));
+  } catch (error) { return fail(res, 'ask', error); }
+});
+
+// 7. Topic + tags for a batch of articles
+app.post('/api/gemini/classify', async (req: Request, res: Response) => {
+  try {
+    const { articles } = req.body ?? {};
+    if (!Array.isArray(articles) || !articles.length) return res.json({ labels: {} });
+    const list = articles.slice(0, 40).map((a: any) => ({ id: clip(a?.id, 80), title: clip(a?.title, 200), excerpt: clip(a?.excerpt, 500), text: clip(a?.excerpt, 500) }));
+    const response = await ai.models.generateContent({
+      model: MODEL,
+      contents: JSON.stringify(list.map(({ id, title, excerpt }) => ({ id, title, excerpt }))),
+      config: { systemInstruction: CLASSIFY_INSTRUCTIONS, responseMimeType: 'application/json', responseSchema: CLASSIFY_SCHEMA as any },
+    });
+    const byId = new Map(list.map((a) => [a.id, a]));
+    const labels = sanitizeLabels(JSON.parse(response.text || '[]'), list.map((a) => a.id), (id) => classify(`${byId.get(id)?.title} ${byId.get(id)?.text}`));
+    return res.json({ labels });
+  } catch (error) { return fail(res, 'classify', error); }
+});
+
+// 8. Themes across the whole library + suggested articles to write next
+app.post('/api/gemini/insights', async (req: Request, res: Response) => {
+  try {
+    const { articles } = req.body ?? {};
+    if (!Array.isArray(articles) || articles.length < 3) return res.status(400).json({ error: 'تلزم ثلاثة مقالات على الأقل لاستخراج الرؤى' });
+    const list = articles.slice(0, 120).map((a: any) => ({ id: clip(a?.id, 80), title: clip(a?.title, 200), excerpt: clip(a?.excerpt, 500) }));
+    const response = await ai.models.generateContent({
+      model: MODEL,
+      contents: JSON.stringify(list),
+      config: { systemInstruction: INSIGHTS_INSTRUCTIONS, responseMimeType: 'application/json', responseSchema: INSIGHTS_SCHEMA as any },
+    });
+    return res.json(sanitizeInsights(JSON.parse(response.text || '{}'), list.map((a) => a.id)));
+  } catch (error) { return fail(res, 'insights', error); }
 });
 
 // Vite middleware mounting for development

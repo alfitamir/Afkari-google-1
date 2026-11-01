@@ -1,10 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Search, Settings } from "lucide-react";
+import { ArrowRight, Lightbulb, Search, Settings, Sparkles, Tags } from "lucide-react";
 import { ArticleEditor } from "@/components/article-editor";
 import { MergeBanner } from "@/components/merge-banner";
 import { SettingsDialog } from "@/components/settings-dialog";
-import { classify, deleteIdea, loadIdeas, matchesArticle, OTHER, TOPICS, type Idea } from "@/lib/ideas";
+import { AskDialog } from "@/components/ask-dialog";
+import { InsightsDialog } from "@/components/insights-dialog";
+import { labelAll, labelFor, loadLabels, unlabeled } from "@/lib/ai-labels";
+import { deleteIdea, loadIdeas, matchesArticle, OTHER, TOPICS, strip, type Idea } from "@/lib/ideas";
 import { deleteIdeaCloud, syncNow } from "@/lib/sync";
 
 export const Route = createFileRoute("/library")({
@@ -25,8 +28,13 @@ function Library() {
   const [topic, setTopic] = useState(ALL);
   const [online, setOnline] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [labels, setLabels] = useState(loadLabels);
+  const [labeling, setLabeling] = useState<{ done: number; total: number } | null>(null);
+  const [labelError, setLabelError] = useState("");
 
-  const refresh = useCallback(() => setIdeas(loadIdeas()), []);
+  const refresh = useCallback(() => { setIdeas(loadIdeas()); setLabels(loadLabels()); }, []);
 
   useEffect(() => {
     refresh();
@@ -34,22 +42,34 @@ function Library() {
     const up = () => { setOnline(true); void syncNow().catch(() => {}); };
     const down = () => setOnline(false);
     window.addEventListener("afkari:ideas-changed", refresh);
+    window.addEventListener("afkari:labels-changed", refresh);
     window.addEventListener("online", up);
     window.addEventListener("offline", down);
     void syncNow().catch(() => {});
     return () => {
       window.removeEventListener("afkari:ideas-changed", refresh);
+      window.removeEventListener("afkari:labels-changed", refresh);
       window.removeEventListener("online", up);
       window.removeEventListener("offline", down);
     };
   }, [refresh]);
 
-  const topicOf = useMemo(() => new Map(ideas.map((i) => [i.id, classify(i.text)])), [ideas]);
+  const labelOf = useMemo(() => new Map(ideas.map((i) => [i.id, labelFor(i, labels)])), [ideas, labels]);
+  const topicOf = useMemo(() => new Map([...labelOf].map(([id, l]) => [id, l.topic])), [labelOf]);
+  const stale = useMemo(() => unlabeled(ideas).length, [ideas, labels]);
   const topics = useMemo(() => [ALL, ...Object.keys(TOPICS), OTHER].filter((t) => t === ALL || ideas.some((i) => topicOf.get(i.id) === t)), [ideas, topicOf]);
   const shown = useMemo(
-    () => ideas.filter((i) => (topic === ALL || topicOf.get(i.id) === topic) && matchesArticle(i, query)),
-    [ideas, topic, topicOf, query],
+    () => ideas.filter((i) => (topic === ALL || topicOf.get(i.id) === topic)
+      && (matchesArticle(i, query) || (labelOf.get(i.id)?.tags ?? []).some((t) => strip(t).includes(strip(query).trim())))),
+    [ideas, topic, topicOf, labelOf, query],
   );
+
+  const classifyAll = async () => {
+    setLabelError(""); setLabeling({ done: 0, total: stale });
+    try { await labelAll(ideas, { onProgress: (done, total) => setLabeling({ done, total }) }); }
+    catch (e) { setLabelError(e instanceof Error ? e.message : "تعذّر التصنيف."); }
+    finally { setLabeling(null); refresh(); }
+  };
 
   const remove = (id: string) => {
     deleteIdea(id);
@@ -74,6 +94,17 @@ function Library() {
           />
         </div>
 
+        <div className="mb-3 flex flex-wrap gap-2">
+          <button onClick={() => setAskOpen(true)} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"><Sparkles className="size-4" />اسأل أفكاري</button>
+          <button onClick={() => setInsightsOpen(true)} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-sm font-medium text-foreground hover:bg-accent"><Lightbulb className="size-4" />رؤى</button>
+          {stale > 0 && (
+            <button onClick={() => void classifyAll()} disabled={!online || !!labeling} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50">
+              <Tags className="size-4" />{labeling ? `جارٍ التصنيف ${labeling.done}/${labeling.total}…` : `صنّف بالذكاء الاصطناعي (${stale})`}
+            </button>
+          )}
+        </div>
+        {labelError && <p role="alert" className="mb-3 text-sm text-destructive">{labelError}</p>}
+
         <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="المواضيع">
           {topics.map((t) => (
             <button
@@ -93,11 +124,22 @@ function Library() {
           <p className="py-16 text-center text-muted-foreground">{ideas.length ? "لا مقالات تطابق بحثك." : "لا أفكار بعد. سجّل فكرتك الأولى من الصفحة الرئيسية."}</p>
         ) : (
           shown.map((idea) => (
-            <ArticleEditor key={`${idea.id}:${idea.updatedAt ?? 0}`} idea={idea} online={online} onChange={refresh} onDelete={() => remove(idea.id)} />
+            <div key={`${idea.id}:${idea.updatedAt ?? 0}`}>
+              {(labelOf.get(idea.id)?.tags.length ?? 0) > 0 && (
+                <div className="-mb-3 flex flex-wrap gap-1.5 pt-4">
+                  {labelOf.get(idea.id)!.tags.map((t) => (
+                    <button key={t} onClick={() => setQuery(t)} className="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground hover:opacity-80">#{t}</button>
+                  ))}
+                </div>
+              )}
+              <ArticleEditor idea={idea} online={online} onChange={refresh} onDelete={() => remove(idea.id)} />
+            </div>
           ))
         )}
       </div>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AskDialog open={askOpen} onOpenChange={setAskOpen} ideas={ideas} online={online} onPick={setQuery} />
+      <InsightsDialog open={insightsOpen} onOpenChange={setInsightsOpen} ideas={ideas} online={online} onChange={refresh} onPick={setQuery} />
     </main>
   );
 }

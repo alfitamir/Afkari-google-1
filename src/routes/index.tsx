@@ -4,6 +4,8 @@ import { saveIdea } from "@/lib/ideas";
 import { onGoogleAuthStateChange, getGoogleUser, getGoogleAccessToken } from "@/lib/google-auth";
 import { syncWithGoogleDrive } from "@/lib/google-drive-sync";
 import { createVoiceRecorder, type VoiceRecorder } from "@/lib/voice-recorder";
+import { canRecordAudio, createAIVoiceRecorder, type AIVoiceRecorder } from "@/lib/audio-recorder";
+import { transcribeAudio } from "@/lib/ai-features";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -26,7 +28,9 @@ function Index() {
   const [msg, setMsg] = useState("");
   const [cloud, setCloud] = useState<"off" | "on" | "syncing">("off");
   const [userEmail, setUserEmail] = useState<string>("");
-  const recRef = useRef<VoiceRecorder | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [canRetry, setCanRetry] = useState(false);
+  const recRef = useRef<(VoiceRecorder & Partial<AIVoiceRecorder>) | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -78,20 +82,36 @@ function Index() {
   useEffect(() => () => { recRef.current?.cancel(); }, []);
 
   const toggleMic = async () => {
-    if (recRef.current?.isRecording()) { await recRef.current.stop(); return; }
+    if (busy) return;
+    if (recRef.current?.isRecording()) { await recRef.current.stop(); setCanRetry(!!recRef.current?.hasPending?.()); return; }
+    recRef.current?.cancel();
+    setCanRetry(false);
+    // Update the ref synchronously so save() sees text that arrives while it awaits stop().
+    const append = (s: string) => { textRef.current = (textRef.current + " " + s).trim(); setText(textRef.current); };
+
+    // Preferred: record audio and let Gemini transcribe it (accurate Arabic, never cuts out on silence).
+    if (canRecordAudio() && navigator.onLine) {
+      recRef.current = createAIVoiceRecorder((blob) => transcribeAudio(blob), { onText: append, onListening: setListening, onMessage: setMsg, onBusy: setBusy });
+      recRef.current.start();
+      return;
+    }
+    // Fallback (offline / unsupported browser): the browser's built-in speech recognition.
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { setMsg("التسجيل الصوتي غير متاح على هذا الجهاز، اكتب فكرتك."); return; }
-    recRef.current?.cancel();
-    recRef.current = createVoiceRecorder(SR, {
-      onText: (s) => setText((t) => { const n = (t + " " + s).trim(); textRef.current = n; return n; }),
-      onListening: setListening,
-      onMessage: setMsg,
-    });
+    recRef.current = createVoiceRecorder(SR, { onText: append, onListening: setListening, onMessage: setMsg });
     recRef.current.start();
   };
 
+  const retry = async () => {
+    await recRef.current?.retry?.();
+    setCanRetry(!!recRef.current?.hasPending?.());
+  };
+
   const save = async () => {
+    if (busy) return;
     if (recRef.current?.isRecording()) await recRef.current.stop();
+    // A recording that could not be transcribed is kept for retry — never close the editor and lose it.
+    if (recRef.current?.hasPending?.()) { setCanRetry(true); return; }
     const body = textRef.current.trim();
     if (!body) return;
     const idea = saveIdea(body);
@@ -126,11 +146,12 @@ function Index() {
             placeholder="اكتب أو تكلم..." className="w-full rounded-2xl border border-border bg-card p-4 text-lg leading-relaxed text-card-foreground outline-none focus:ring-2 focus:ring-ring" />
           {listening && <p className="text-center text-sm text-destructive">● جاري التسجيل… لن يتوقف إلا بضغطك على «إيقاف التسجيل»</p>}
           <div className="flex gap-3">
-            <button onClick={toggleMic} aria-pressed={listening} className={`flex-1 rounded-full py-3 font-semibold ${listening ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-secondary text-secondary-foreground"}`}>
-              {listening ? "■ إيقاف التسجيل" : "🎙 ابدأ التسجيل"}
+            <button onClick={toggleMic} disabled={busy} aria-pressed={listening} className={`flex-1 rounded-full py-3 font-semibold ${listening ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-secondary text-secondary-foreground"}`}>
+              {busy ? "… جارٍ التفريغ" : listening ? "■ إيقاف التسجيل" : "🎙 ابدأ التسجيل"}
             </button>
-            <button onClick={save} className="flex-1 rounded-full bg-primary py-3 font-semibold text-primary-foreground">حفظ</button>
+            <button onClick={save} disabled={busy} className="flex-1 rounded-full bg-primary py-3 font-semibold text-primary-foreground disabled:opacity-50">حفظ</button>
           </div>
+          {canRetry && <button onClick={retry} disabled={busy} className="w-full rounded-full border border-border py-2 text-sm font-semibold text-primary">إعادة المحاولة</button>}
           <button onClick={cancel} className="w-full text-sm text-muted-foreground">إلغاء</button>
         </div>
       )}

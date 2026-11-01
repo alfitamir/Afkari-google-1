@@ -1,0 +1,116 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Idea } from "./ideas";
+
+const geminiStream = vi.fn();
+vi.mock("./gemini", async (orig) => ({ ...(await orig<typeof import("./gemini")>()), geminiStream: (...a: unknown[]) => geminiStream(...a) }));
+
+import { askIdeas, classifyBatch, excerptFor, getInsights, retrieveRelevant, transcribeAudio } from "./ai-features";
+
+const idea = (id: string, title: string, body: string, createdAt = 1): Idea => ({ id, text: body, createdAt, articleTitle: title, articleBody: body, updatedAt: createdAt });
+const lib = [
+  idea("g", "غزة والمقاومة", "كلام طويل عن غزة والمقاومة والاحتلال.\n\nفقرة ثانية عن الصبر.", 1),
+  idea("f", "الأسرة والتربية", "التربية في الأسرة المسلمة مسؤولية مشتركة.", 2),
+  idea("w", "العمل والإدارة", "إدارة الفريق في الشركة تحتاج وضوحا.", 3),
+];
+
+const fetchMock = vi.fn();
+beforeEach(() => { geminiStream.mockReset(); fetchMock.mockReset(); vi.stubGlobal("fetch", fetchMock); });
+afterEach(() => vi.unstubAllGlobals());
+const reply = (payload: unknown, ok = true) => fetchMock.mockResolvedValue({ ok, json: async () => payload });
+
+describe("retrieveRelevant", () => {
+  it("ranks the article whose title/body matches the question first", () => {
+    expect(retrieveRelevant("ما رأيي في المقاومة في غزة؟", lib)[0].id).toBe("g");
+    expect(retrieveRelevant("كيف أربي أولادي في الأسرة", lib)[0].id).toBe("f");
+  });
+  it("matches despite diacritics, hamza variants and the definite article", () => {
+    expect(retrieveRelevant("الإِدَارَةُ", lib)[0].id).toBe("w");
+  });
+  it("treats ة/ه and ى/ي spelling variants as the same word", () => {
+    expect(retrieveRelevant("غزه", lib)[0].id).toBe("g");
+    expect(retrieveRelevant("الاداره", lib)[0].id).toBe("w");
+  });
+  it("falls back to the newest articles when nothing matches", () => {
+    expect(retrieveRelevant("zzzz qqqq", lib).map((a) => a.id)).toEqual(["w", "f", "g"]);
+  });
+  it("respects k and the excerpt size cap", () => {
+    const big = idea("big", "غزة", Array.from({ length: 50 }, (_, i) => `فقرة ${i} عن غزة ${"كلمة ".repeat(40)}`).join("\n\n"));
+    const [a] = retrieveRelevant("غزة", [big, ...lib], 1, 500);
+    expect(retrieveRelevant("غزة", [big, ...lib], 1)).toHaveLength(1);
+    expect(a.excerpt.length).toBeLessThanOrEqual(500);
+  });
+});
+
+describe("excerptFor", () => {
+  it("prefers the paragraphs that mention the question terms, in original order", () => {
+    const body = "مقدمة عامة.\n\nعن الصبر وحده.\n\nعن غزة والمقاومة.";
+    expect(excerptFor(body, ["غزه"], 20)).toBe("عن غزة والمقاومة.");
+  });
+});
+
+describe("askIdeas routing", () => {
+  it("uses the app server when no personal key is saved", async () => {
+    reply({ answer: "جواب", sources: [{ id: "g", note: "n" }, { id: "fake", note: "x" }] });
+    const out = await askIdeas("المقاومة", lib);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/gemini/ask");
+    expect(out.sources.map((s) => s.id)).toEqual(["g"]); // hallucinated id removed
+    expect(out.used.length).toBeGreaterThan(0);
+  });
+  it("uses the user's own Gemini key directly when provided, bypassing the server", async () => {
+    geminiStream.mockResolvedValue(JSON.stringify({ answer: "جواب", sources: [] }));
+    const out = await askIdeas("المقاومة", lib, { key: "K" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(geminiStream.mock.calls[0][0]).toBe("K");
+    expect(out.answer).toBe("جواب");
+  });
+  it("explains malformed model JSON instead of crashing", async () => {
+    geminiStream.mockResolvedValue("{not json");
+    await expect(askIdeas("x", lib, { key: "K" })).rejects.toThrow("غير مكتمل");
+  });
+  it("surfaces the server's error message", async () => {
+    reply({ error: "حد الاستخدام" }, false);
+    await expect(askIdeas("x", lib)).rejects.toThrow("حد الاستخدام");
+  });
+  it("reports an unreachable server in Arabic", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fail"));
+    await expect(askIdeas("x", lib)).rejects.toThrow("تعذّر الوصول");
+  });
+  it("refuses an empty library", async () => {
+    await expect(askIdeas("x", [])).rejects.toThrow("لا توجد مقالات");
+  });
+});
+
+describe("classifyBatch / getInsights / transcribeAudio", () => {
+  it("classifyBatch returns server labels and is a no-op for no ideas", async () => {
+    expect(await classifyBatch([])).toEqual({});
+    expect(fetchMock).not.toHaveBeenCalled();
+    reply({ labels: { g: { topic: "الأمة والعالم", tags: ["غزة"] } } });
+    expect((await classifyBatch(lib)).g.tags).toEqual(["غزة"]);
+  });
+  it("classifyBatch sanitizes labels from the personal-key path", async () => {
+    geminiStream.mockResolvedValue(JSON.stringify([{ id: "g", topic: "موضوع مخترع", tags: ["#س"] }, { id: "nope", topic: "x", tags: [] }]));
+    const out = await classifyBatch(lib, { key: "K" });
+    expect(Object.keys(out)).toEqual(["g"]);
+    expect(out.g.tags).toEqual(["س"]);
+    expect(out.g.topic).not.toBe("موضوع مخترع");
+  });
+  it("getInsights needs three articles and validates ids", async () => {
+    await expect(getInsights(lib.slice(0, 2))).rejects.toThrow("ثلاثة");
+    reply({ themes: [{ name: "م", summary: "s", ids: ["g", "f", "ghost"] }], prompts: [{ title: "ت", angle: "ز" }] });
+    expect((await getInsights(lib)).themes[0].ids).toEqual(["g", "f"]);
+  });
+  it("transcribeAudio posts base64 audio with a clean mime type to the server", async () => {
+    reply({ text: " نص مفرَّغ " });
+    const text = await transcribeAudio(new Blob(["abc"], { type: "audio/webm;codecs=opus" }));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/gemini/transcribe");
+    expect(body.mimeType).toBe("audio/webm");
+    expect(atob(body.data)).toBe("abc");
+    expect(text).toBe("نص مفرَّغ");
+  });
+  it("transcribeAudio sends inline audio parts when a personal key is used", async () => {
+    geminiStream.mockResolvedValue(" نص ");
+    expect(await transcribeAudio(new Blob(["x"], { type: "audio/mp4" }), { key: "K" })).toBe("نص");
+    expect(geminiStream.mock.calls[0][2][0].inlineData.mimeType).toBe("audio/mp4");
+  });
+});

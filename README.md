@@ -18,6 +18,23 @@ bun run dev               # http://localhost:3000 (Express + Vite)
 | `bun run test` | Unit tests (Vitest + jsdom) |
 | `bun run build` | Production build to `dist/` |
 
+## AI features
+
+All run on the server's `GEMINI_API_KEY`, or directly from the browser on the user's own key saved in Settings.
+Set `GEMINI_MODEL` to override the default model.
+
+| Feature | Where | Endpoint |
+| --- | --- | --- |
+| Voice capture: records audio, Gemini transcribes (falls back to browser speech recognition when offline) | `/` | `POST /api/gemini/transcribe` |
+| Polish an article in the author's voice, with a completeness guard | `/library` | `/api/gemini/polish` |
+| Merge related articles | `/library` | `/api/gemini/{suggest-merges,merge}` |
+| **Ask my ideas**: answers only from the author's own articles, with sources | `/library` | `/api/gemini/ask` |
+| **AI topics and tags** (closed topic list; stored beside ideas, invalidated on edit) | `/library` | `/api/gemini/classify` |
+| **Insights**: recurring themes + suggested articles to write next | `/library` | `/api/gemini/insights` |
+
+Prompts, schemas and output sanitizers live in `src/lib/ai-prompts.ts` and are shared by server and browser.
+Model output is never trusted: unknown ids, invented topics and empty answers are filtered before reaching the UI.
+
 ## Layout
 
 - `server.ts` — Gemini endpoints: `/api/gemini/{polish,merge,suggest-merges,suggest-additions}`, `/api/health`
