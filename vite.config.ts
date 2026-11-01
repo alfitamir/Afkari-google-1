@@ -8,7 +8,22 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, './src'),
+        '@': path.resolve(import.meta.dirname, './src'),
+      },
+    },
+    build: {
+      rolldownOptions: {
+        output: {
+          // Keep heavy, rarely-changing vendors out of the app chunk so deploys re-download less.
+          codeSplitting: {
+            groups: [
+              { name: 'firebase', test: /node_modules[\\/](@firebase|firebase)[\\/]/, priority: 30 },
+              { name: 'supabase', test: /node_modules[\\/]@supabase[\\/]/, priority: 30 },
+              { name: 'router', test: /node_modules[\\/]@tanstack[\\/]/, priority: 20 },
+              { name: 'vendor', test: /node_modules[\\/]/, priority: 10 },
+            ],
+          },
+        },
       },
     },
     server: {

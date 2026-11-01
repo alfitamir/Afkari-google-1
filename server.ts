@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+import { parseImprovedArticle } from './src/lib/article-ai';
 
 dotenv.config();
 
@@ -18,6 +19,9 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+const MAX_BODY_CHARS = 200_000;
+app.get('/api/health', (_req, res) => res.json({ ok: true, gemini: Boolean(process.env.GEMINI_API_KEY) }));
 
 // Server-side Google Gemini client
 const ai = new GoogleGenAI({
@@ -84,6 +88,9 @@ app.post('/api/gemini/polish', async (req: Request, res: Response) => {
     if (!body || typeof body !== 'string') {
       return res.status(400).json({ error: 'نص المقال مطلوب' });
     }
+    if (body.length > MAX_BODY_CHARS) {
+      return res.status(413).json({ error: 'المقال أطول من الحد المسموح' });
+    }
 
     const prompt = `المقال الحالي المراد تحسينه وضبطه:\nالعنوان: ${title || 'بدون عنوان'}\n\nالنص:\n${body}\n\nالنص الأصلي المسجل:\n${original || body}\n\nعينات من أسلوب الكاتب للاسترشاد بنبرته ومفرداته:\n${(samples || []).join('\n---\n')}`;
 
@@ -95,15 +102,8 @@ app.post('/api/gemini/polish', async (req: Request, res: Response) => {
       },
     });
 
-    const text = response.text || '';
-    const parts = text.split(/\n\s*\n/);
-    const newTitle = (parts[0] || '').replace(/^[#*\s]+/, '').trim();
-    const newBody = parts.slice(1).join('\n\n').trim() || text;
-
-    return res.json({
-      title: newTitle || title,
-      body: newBody || text,
-    });
+    const { title: newTitle, body: newBody } = parseImprovedArticle(response.text || '');
+    return res.json({ title: newTitle || title, body: newBody });
   } catch (error: any) {
     console.error('Error polishing article:', error);
     return res.status(500).json({ error: error?.message || 'تعذّر ضبط المقال عبر Gemini' });
@@ -185,12 +185,7 @@ app.post('/api/gemini/merge', async (req: Request, res: Response) => {
       },
     });
 
-    const text = response.text || '';
-    const parts = text.split(/\n\s*\n/);
-    const title = (parts[0] || '').replace(/^[#*\s]+/, '').trim();
-    const body = parts.slice(1).join('\n\n').trim() || text;
-
-    return res.json({ title, body });
+    return res.json(parseImprovedArticle(response.text || ''));
   } catch (error: any) {
     console.error('Error merging articles:', error);
     return res.status(500).json({ error: error?.message || 'تعذّر دمج المقالات عبر Gemini' });

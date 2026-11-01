@@ -1,6 +1,6 @@
 export function parseImprovedArticle(text: string): { title: string; body: string } {
   const lines = text.trim().split("\n");
-  const title = (lines.shift() ?? "").replace(/^#+\s*/, "").trim();
+  const title = (lines.shift() ?? "").replace(/^[#*\s]+|[*\s]+$/g, "");
   const body = lines.join("\n").trim();
   if (!title || !body) throw new Error("لم تصل نسخة مكتملة من المقال. لم يتغير مقالك الأصلي.");
   return { title, body };
@@ -113,9 +113,11 @@ export async function improveFull(
       throw new Error(err.error || "تعذّر ضبط المقال عبر خادم الذكاء الاصطناعي");
     }
     const data = await response.json();
-    const formatted = `# ${data.title}\n\n${data.body}`;
-    onText(formatted);
-    return { title: data.title, body: data.body };
+    // The server path must be held to the same "nothing dropped" standard as the streaming paths.
+    if (typeof data.body !== "string" || !isComplete(article.body, data.body)) throw new Error(INCOMPLETE);
+    const title = String(data.title || "").trim() || article.title;
+    onText(`# ${title}\n\n${data.body}`);
+    return { title, body: data.body };
   }
 
   const chunks = splitChunks(article.body);

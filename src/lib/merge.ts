@@ -109,7 +109,9 @@ export async function mergeArticles(
     throw new Error(err.error || "تعذّر دمج المقالات عبر خادم الذكاء الاصطناعي");
   }
   const data = await res.json();
-  onText(`# ${data.title}\n\n${data.body}`);
-  return { title: data.title, body: data.body };
+  if (typeof data.body !== "string" || !isMergeComplete(sources.map((s) => s.body), data.body)) throw new Error(INCOMPLETE);
+  const title = String(data.title || "").trim() || sources[0]?.title || "مقال مدمج";
+  onText(`# ${title}\n\n${data.body}`);
+  return { title, body: data.body };
 }
 
