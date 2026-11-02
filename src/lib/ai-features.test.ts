@@ -4,7 +4,8 @@ import type { Idea } from "./ideas";
 const geminiStream = vi.fn();
 vi.mock("./gemini", async (orig) => ({ ...(await orig<typeof import("./gemini")>()), geminiStream: (...a: unknown[]) => geminiStream(...a) }));
 
-import { askIdeas, classifyBatch, excerptFor, getInsights, retrieveRelevant, transcribeAudio } from "./ai-features";
+import { askIdeas, classifyBatch, excerptFor, getEvidence, getInsights, retrieveRelevant, transcribeAudio } from "./ai-features";
+import { clearEvidenceCache } from "./evidence";
 
 const idea = (id: string, title: string, body: string, createdAt = 1): Idea => ({ id, text: body, createdAt, articleTitle: title, articleBody: body, updatedAt: createdAt });
 const lib = [
@@ -112,5 +113,43 @@ describe("classifyBatch / getInsights / transcribeAudio", () => {
     geminiStream.mockResolvedValue(" نص ");
     expect(await transcribeAudio(new Blob(["x"], { type: "audio/mp4" }), { key: "K" })).toBe("نص");
     expect(geminiStream.mock.calls[0][2][0].inlineData.mimeType).toBe("audio/mp4");
+  });
+});
+
+describe("getEvidence (end to end)", () => {
+  const article = { title: "الأمانة", body: "الأمانة أساس العمران ومن ضيعها ضيع الأمة كلها وهذه دعوى المقال الأولى والأخيرة." };
+  const ayah = { data: { text: "إِنَّا عَرَضْنَا ٱلْأَمَانَةَ عَلَى ٱلسَّمَٰوَٰتِ وَٱلْأَرْضِ", numberInSurah: 72, surah: { number: 33, name: "سُورَةُ الأحزاب" } } };
+  const route = (candidates: unknown) => fetchMock.mockImplementation(async (url: string) => {
+    if (url === "/api/gemini/evidence") return { ok: true, json: async () => ({ candidates }) };
+    if (url.includes("/33:72/")) return { ok: true, json: async () => ayah };
+    throw new TypeError("offline");
+  });
+  const quran = { kind: "quran", surah: 33, from: 72, to: 72, opening: "إنا عرضنا الأمانة على السماوات", claim: "c", why: "w" };
+  beforeEach(() => clearEvidenceCache());
+
+  it("returns the SOURCE text for a correct reference", async () => {
+    route([quran]);
+    const { items } = await getEvidence(article);
+    expect(items[0]).toMatchObject({ kind: "quran", status: "verified" });
+    expect((items[0] as any).text).toContain("ٱلْأَمَانَةَ");
+  });
+  it("REGRESSION: a hallucinated reference never reaches the user, and the user is told why", async () => {
+    route([{ ...quran, opening: "اقرأ باسم ربك الذي خلق" }]);
+    await expect(getEvidence(article)).rejects.toThrow("أسقطنا الاقتراحات");
+  });
+  it("uses the personal key directly and still verifies against the source", async () => {
+    geminiStream.mockResolvedValue(JSON.stringify([quran]));
+    route([]);
+    const { items } = await getEvidence(article, { key: "K" });
+    expect(fetchMock.mock.calls.some((c) => c[0] === "/api/gemini/evidence")).toBe(false);
+    expect(items[0].status).toBe("verified");
+  });
+  it("rejects a too-short article before any request", async () => {
+    await expect(getEvidence({ title: "t", body: "قصير" })).rejects.toThrow("قصير");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("explains when the model found nothing suitable", async () => {
+    route([]);
+    await expect(getEvidence(article)).rejects.toThrow("لم يقترح");
   });
 });

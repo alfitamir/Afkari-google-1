@@ -1,8 +1,9 @@
 import {
-  ASK_INSTRUCTIONS, ASK_SCHEMA, CLASSIFY_INSTRUCTIONS, CLASSIFY_SCHEMA, INSIGHTS_INSTRUCTIONS, INSIGHTS_SCHEMA,
+  ASK_INSTRUCTIONS, ASK_SCHEMA, CLASSIFY_INSTRUCTIONS, CLASSIFY_SCHEMA, EVIDENCE_INSTRUCTIONS, EVIDENCE_SCHEMA, INSIGHTS_INSTRUCTIONS, INSIGHTS_SCHEMA,
   TRANSCRIBE_INSTRUCTIONS, sanitizeAsk, sanitizeInsights, sanitizeLabels,
   type AskAnswer, type AskArticle, type ClassifyItem, type InsightItem, type Insights, type Label,
 } from "./ai-prompts";
+import { verifyAll, type EvidenceResult } from "./evidence";
 import { getGeminiKey, geminiStream } from "./gemini";
 import { classify, getArticle, strip, type Idea } from "./ideas";
 
@@ -125,4 +126,21 @@ export async function getInsights(ideas: Idea[], o: AIOptions = {}): Promise<Ins
     ? parseJSON(await geminiStream(key, INSIGHTS_INSTRUCTIONS, JSON.stringify(items), signalOf(o), () => {}, INSIGHTS_SCHEMA))
     : await server<unknown>("insights", { articles: items }, signalOf(o));
   return sanitizeInsights(raw, items.map((i) => i.id));
+}
+
+// ---------- evidence from Quran, Sunnah and other writings ----------
+/** The model proposes references; every Quran/hadith text shown is fetched from a source and checked against them. */
+export async function getEvidence(article: { title: string; body: string }, o: AIOptions = {}): Promise<EvidenceResult> {
+  if (article.body.trim().length < 40) throw new Error("المقال قصير جدًا لاقتراح شواهد له.");
+  const key = keyOf(o);
+  const raw = key
+    ? parseJSON(await geminiStream(key, EVIDENCE_INSTRUCTIONS, `عنوان المقال: ${article.title}\n\nنص المقال:\n${article.body.slice(0, 12000)}`, signalOf(o), () => {}, EVIDENCE_SCHEMA))
+    : (await server<{ candidates: unknown }>("evidence", article, signalOf(o))).candidates;
+  const result = await verifyAll(raw, o.signal);
+  if (!result.items.length) {
+    throw new Error(result.dropped
+      ? "لم نجد شاهدًا يتطابق مع نصوص المصادر الموثوقة، فأسقطنا الاقتراحات احتياطًا. جرّب مقالًا أطول أو أعد المحاولة."
+      : "لم يقترح الذكاء الاصطناعي شواهد مناسبة لهذا المقال.");
+  }
+  return result;
 }

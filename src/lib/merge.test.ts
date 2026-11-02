@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dismissSuggestion, fingerprint, liveSuggestions, mergeArticles, sanitizeSuggestions } from "./merge";
+import { dismissSuggestion, excerptForMatching, fingerprint, liveSuggestions, mergeArticles, sanitizeSuggestions } from "./merge";
 import { INCOMPLETE } from "./article-ai";
 import type { Idea } from "./ideas";
 
@@ -20,6 +20,46 @@ describe("sanitizeSuggestions", () => {
   it("dedupes ids inside a group and defaults the title", () => {
     const [s] = sanitizeSuggestions([{ ids: ["a", "a", "b"], title: "  ", reason: " r " }], ideas);
     expect(s).toEqual({ ids: ["a", "b"], title: "مقال مدمج", reason: "r" });
+  });
+});
+
+describe("sanitizeSuggestions: strength and thesis", () => {
+  it("drops weak links (strength < 3) and orders strongest first", () => {
+    const out = sanitizeSuggestions([
+      { ids: ["a", "b"], title: "weak", reason: "", strength: 2 },
+      { ids: ["b", "d"], title: "ok", reason: "", strength: 3 },
+      { ids: ["a", "c"], title: "strong", reason: "", strength: 5, thesis: " أطروحة " },
+    ], ideas);
+    expect(out.map((s) => s.title)).toEqual(["strong", "ok"]);
+    expect(out[0].thesis).toBe("أطروحة");
+  });
+  it("a strong group claims its articles before a weaker overlapping one", () => {
+    const out = sanitizeSuggestions([
+      { ids: ["a", "b"], title: "weaker", reason: "", strength: 3 },
+      { ids: ["b", "c"], title: "stronger", reason: "", strength: 5 },
+    ], ideas);
+    expect(out.map((s) => s.ids)).toEqual([["b", "c"]]);
+  });
+  it("caps a group at 5 articles and the list at 5 groups", () => {
+    const many = Array.from({ length: 14 }, (_, i) => ({ id: `n${i}`, text: "x", createdAt: i }));
+    const groups = Array.from({ length: 7 }, (_, g) => ({ ids: [`n${g * 2}`, `n${g * 2 + 1}`], title: `g${g}`, reason: "", strength: 4 }));
+    expect(sanitizeSuggestions(groups, many)).toHaveLength(5);
+    expect(sanitizeSuggestions([{ ids: many.map((m) => m.id), title: "big", reason: "", strength: 4 }], many)[0].ids).toHaveLength(5);
+  });
+  it("treats a missing or garbage strength as an average link instead of discarding the group", () => {
+    expect(sanitizeSuggestions([{ ids: ["a", "b"], title: "t", reason: "" }], ideas)).toHaveLength(1);
+    expect(sanitizeSuggestions([{ ids: ["a", "b"], title: "t", reason: "", strength: "high" }], ideas)).toHaveLength(1);
+  });
+});
+
+describe("excerptForMatching", () => {
+  it("keeps short bodies whole and samples opening + ending of long ones", () => {
+    expect(excerptForMatching("قصير")).toBe("قصير");
+    const long = "بداية" + "و".repeat(2000) + "نهاية";
+    const ex = excerptForMatching(long);
+    expect(ex.startsWith("بداية")).toBe(true);
+    expect(ex.endsWith("نهاية")).toBe(true);
+    expect(ex.length).toBeLessThan(750);
   });
 });
 

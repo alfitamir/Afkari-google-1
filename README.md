@@ -30,7 +30,26 @@ Set `GEMINI_MODEL` to override the default model.
 | Merge related articles | `/library` | `/api/gemini/{suggest-merges,merge}` |
 | **Ask my ideas**: answers only from the author's own articles, with sources | `/library` | `/api/gemini/ask` |
 | **AI topics and tags** (closed topic list; stored beside ideas, invalidated on edit) | `/library` | `/api/gemini/classify` |
+| **Evidence**: Quran, Sunnah and other writings that support an article's claims, with the text fetched and checked against the source | `/library` (book icon), merge preview | `POST /api/gemini/evidence` |
 | **Insights**: recurring themes + suggested articles to write next | `/library` | `/api/gemini/insights` |
+
+### Evidence is verified, not recalled
+
+Language models invent verses and hadith. So the model only proposes **references** (surah:ayah, collection + number, with the opening words of the text).
+The app then fetches the real text from [alquran.cloud](https://alquran.cloud) and the [hadith-api](https://github.com/fawazahmed0/hadith-api) CDN and
+checks it matches those opening words (`src/lib/evidence.ts`):
+
+- text shown is always the **source's**, never the model's wording;
+- a reference whose text does not match, or does not exist, is dropped (and the count shown);
+- openings made only of stock phrases ("قال رسول الله صلى الله عليه وسلم") cannot verify anything and are rejected;
+- if the source is unreachable the reference is kept but shown **without text** and marked unverified;
+- other writings (books) are shown as paraphrased ideas labelled "راجع الكتاب قبل الاستشهاد", never as quotes.
+
+## Server reliability
+
+`src/lib/ai-runner.ts` wraps every Gemini call: model fallback chain (`GEMINI_MODEL` / `GEMINI_MODELS` first, then
+`gemini-3.6-flash → gemini-3-flash-preview → gemini-flash-lite-latest`), retry with backoff, per-call timeout, Arabic error messages,
+a 1-hour cache for structured results with shared in-flight requests, and a 40 requests/minute/IP limit.
 
 Prompts, schemas and output sanitizers live in `src/lib/ai-prompts.ts` and are shared by server and browser.
 Model output is never trusted: unknown ids, invented topics and empty answers are filtered before reaching the UI.
