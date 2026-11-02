@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Lightbulb, Pencil, Quote, Share2, Sparkles, Square, Trash2, X, PlusCircle, HelpCircle } from "lucide-react";
+import { BookOpen, Check, Lightbulb, Pencil, Quote, Share2, Sparkles, Square, Trash2, X, PlusCircle, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { getArticle, loadIdeas, updateArticle, type Idea } from "@/lib/ideas";
 import { pushIdea } from "@/lib/sync";
 import { improveFull, getArticleEnrichment, type ArticleEnrichment } from "@/lib/article-ai";
 import { resolveEngine } from "@/lib/ai-engine";
+import { EvidenceDialog } from "@/components/evidence-dialog";
 
 export function ArticleEditor({ idea, online, onChange, onDelete }: {
   idea: Idea; online: boolean; onChange: () => void; onDelete: () => void;
@@ -27,6 +28,7 @@ export function ArticleEditor({ idea, online, onChange, onDelete }: {
   const [enrichment, setEnrichment] = useState<ArticleEnrichment | null>(null);
   const [enrichTab, setEnrichTab] = useState<"additions" | "quotes" | "questions">("quotes");
 
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const version = useRef(idea.updatedAt ?? 0);
   useEffect(() => () => abort.current?.abort(), []);
@@ -110,11 +112,20 @@ export function ArticleEditor({ idea, online, onChange, onDelete }: {
         <Button variant="ghost" size="icon" aria-label="تعديل المقال" title="تعديل المقال" onClick={() => { setTitle(article.title); setBody(article.body); setEditing(true); setMessage(""); }}><Pencil /></Button>
         <Button variant="ghost" size="icon" aria-label="مشاركة المقال" title="مشاركة المقال" onClick={share}><Share2 /></Button>
         <Button variant="ghost" size="icon" aria-label="تحسين وضبط بأسلوبي" title={online ? "ضبط اللغة والأسلوب بـ Gemini" : "التحسين يحتاج الإنترنت"} disabled={!online || busy} onClick={improve}><Sparkles /></Button>
+        <Button variant="ghost" size="icon" aria-label="شواهد من القرآن والسنة" title={online ? "شواهد من القرآن والسنة وكتب العلماء مع التحقق من النص" : "الشواهد تحتاج الإنترنت"} disabled={!online} onClick={() => setEvidenceOpen(true)}><BookOpen className="text-emerald-600" /></Button>
         <Button variant="ghost" size="icon" aria-label="اقتراحات واقتباسات للإثراء" title={online ? "اقتراحات واقتباسات من كبار المفكرين لتطوير المقال" : "الإثراء يحتاج الإنترنت"} disabled={!online || enrichBusy} onClick={openEnrichment}><Lightbulb className="text-amber-500" /></Button>
         <Button variant="ghost" size="icon" className="text-destructive" aria-label="حذف المقال" title="حذف المقال" onClick={() => setConfirmDelete(true)}><Trash2 /></Button>
       </div>
     </>}
     {message && <p role="status" className="mt-3 break-words text-sm text-muted-foreground">{message}</p>}
+
+    <EvidenceDialog open={evidenceOpen} onOpenChange={setEvidenceOpen} title={article.title} body={article.body} online={online}
+      onInsert={(snippet) => {
+        const latest = loadIdeas().find((i) => i.id === idea.id);
+        const current = latest ? getArticle(latest) : article;
+        const updated = updateArticle(idea.id, current.title, `${current.body}\n\n${snippet}`);
+        if (updated) { onChange(); void pushIdea(updated).catch(() => {}); setMessage("أُدرج الشاهد في نهاية المقال ✓"); }
+      }} />
 
     {/* Polish & Improve Review Dialog */}
     <Dialog open={previewOpen} onOpenChange={(open) => { if (!open) abort.current?.abort(); setPreviewOpen(open); }}>

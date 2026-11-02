@@ -1,8 +1,9 @@
 import { getArticle, type Idea } from "./ideas";
 import { INCOMPLETE, isMergeComplete, parseImprovedArticle } from "./article-ai";
-import { geminiStream, MERGE_INSTRUCTIONS, SUGGEST_INSTRUCTIONS } from "./gemini";
+import { geminiStream, MERGE_INSTRUCTIONS } from "./gemini";
+import { MERGE_SUGGEST_INSTRUCTIONS, MERGE_SUGGEST_SCHEMA } from "./ai-prompts";
 
-export type MergeSuggestion = { ids: string[]; title: string; reason: string };
+export type MergeSuggestion = { ids: string[]; title: string; reason: string; thesis?: string; strength?: number };
 
 const CACHE = "afkari.mergeSuggestions";
 const DISMISSED = "afkari.mergeDismissed";
@@ -31,40 +32,42 @@ export function liveSuggestions(list: MergeSuggestion[], ideas: Idea[]): MergeSu
   return list.filter((s) => s.ids.length >= 2 && s.ids.every((id) => ids.has(id)) && !dismissed.has(groupKey(s.ids)));
 }
 
-/** Clean model output: known ids only, no duplicates across groups, 2+ members. */
+/** Clean model output: known ids only, no duplicates across groups, 2-5 members, weak links dropped, strongest first. */
 export function sanitizeSuggestions(raw: unknown, ideas: Idea[]): MergeSuggestion[] {
   if (!Array.isArray(raw)) return [];
   const known = new Set(ideas.map((i) => i.id));
   const used = new Set<string>();
   const out: MergeSuggestion[] = [];
-  for (const s of raw) {
-    if (!s || !Array.isArray(s.ids)) continue;
-    const ids = [...new Set((s.ids as unknown[]).filter((id): id is string => typeof id === "string" && known.has(id) && !used.has(id)))];
+  const given = (s: any) => (Number.isInteger(Number(s?.strength)) && s?.strength !== null && s?.strength !== "" ? Math.min(5, Math.max(1, Number(s.strength))) : undefined);
+  // A missing strength counts as an average link (3) for ranking, but is not reported as if the model had said so.
+  const ranked = raw.map((s, i) => ({ s, i, strength: given(s) }))
+    .sort((a, b) => (b.strength ?? 3) - (a.strength ?? 3) || a.i - b.i);
+  for (const { s, strength } of ranked) {
+    if (!s || !Array.isArray(s.ids) || (strength ?? 3) < 3) continue;
+    const ids = [...new Set((s.ids as unknown[]).filter((id): id is string => typeof id === "string" && known.has(id) && !used.has(id)))].slice(0, 5);
     if (ids.length < 2) continue;
     ids.forEach((id) => used.add(id));
-    out.push({ ids, title: String(s.title ?? "").trim() || "مقال مدمج", reason: String(s.reason ?? "").trim() });
+    const thesis = String(s.thesis ?? "").trim();
+    out.push({ ids, title: String(s.title ?? "").trim() || "مقال مدمج", reason: String(s.reason ?? "").trim(), ...(thesis ? { thesis } : {}), ...(strength !== undefined ? { strength } : {}) });
   }
-  return out;
+  return out.slice(0, 5);
 }
 
-const SCHEMA = {
-  type: "ARRAY",
-  items: {
-    type: "OBJECT",
-    properties: { ids: { type: "ARRAY", items: { type: "STRING" } }, title: { type: "STRING" }, reason: { type: "STRING" } },
-    required: ["ids", "title", "reason"],
-  },
-};
+const SCHEMA = MERGE_SUGGEST_SCHEMA;
+
+/** Opening + ending carry an article's thesis and conclusion; the middle adds little for matching. */
+export const excerptForMatching = (body: string) =>
+  body.length <= 700 ? body : `${body.slice(0, 450)} … ${body.slice(-250)}`;
 
 export async function findMerges(ideas: Idea[], signal?: AbortSignal, key?: string): Promise<MergeSuggestion[]> {
   if (ideas.length < 2) return [];
   const list = ideas.slice(0, 80).map((i) => {
     const a = getArticle(i);
-    return { id: i.id, title: a.title, excerpt: a.body.slice(0, 600) };
+    return { id: i.id, title: a.title, excerpt: excerptForMatching(a.body) };
   });
 
   if (key) {
-    const text = await geminiStream(key, SUGGEST_INSTRUCTIONS, JSON.stringify(list), signal ?? new AbortController().signal, () => {}, SCHEMA);
+    const text = await geminiStream(key, MERGE_SUGGEST_INSTRUCTIONS, JSON.stringify(list), signal ?? new AbortController().signal, () => {}, SCHEMA);
     return sanitizeSuggestions(JSON.parse(text), ideas);
   }
 
@@ -109,7 +112,9 @@ export async function mergeArticles(
     throw new Error(err.error || "تعذّر دمج المقالات عبر خادم الذكاء الاصطناعي");
   }
   const data = await res.json();
-  onText(`# ${data.title}\n\n${data.body}`);
-  return { title: data.title, body: data.body };
+  if (typeof data.body !== "string" || !isMergeComplete(sources.map((s) => s.body), data.body)) throw new Error(INCOMPLETE);
+  const title = String(data.title || "").trim() || sources[0]?.title || "مقال مدمج";
+  onText(`# ${title}\n\n${data.body}`);
+  return { title, body: data.body };
 }
 
