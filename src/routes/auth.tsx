@@ -27,14 +27,16 @@ export const Route = createFileRoute("/auth")({
 function Auth() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(getGoogleUser());
+  const [hasToken, setHasToken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState("");
   const [lastSync, setLastSync] = useState<number | null>(getLastDriveSyncTime());
 
   useEffect(() => {
-    const unsub = onGoogleAuthStateChange((currentUser) => {
+    const unsub = onGoogleAuthStateChange((currentUser, token) => {
       setUser(currentUser);
+      setHasToken(!!token);
       setLastSync(getLastDriveSyncTime());
     });
     return unsub;
@@ -140,6 +142,21 @@ function Auth() {
               </p>
             )}
           </div>
+
+          {!hasToken && (
+            <div className="rounded-xl bg-amber-500/10 p-3 text-xs space-y-2.5 border border-amber-500/30">
+              <p className="text-amber-700 dark:text-amber-400 font-medium leading-relaxed">
+                انتهت جلسة الربط مع Google Drive — سجّل الدخول مجددًا لاستئناف المزامنة
+              </p>
+              <button
+                onClick={handleGoogleLogin}
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:opacity-90 disabled:opacity-60 transition"
+              >
+                <span>{busy ? "جارٍ تسجيل الدخول..." : "تسجيل الدخول مجددًا"}</span>
+              </button>
+            </div>
+          )}
 
           <div className="space-y-2">
             <button
