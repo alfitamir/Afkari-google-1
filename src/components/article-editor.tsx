@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Check, Lightbulb, Pencil, Quote, Share2, Sparkles, Square, Trash2, X, PlusCircle, HelpCircle } from "lucide-react";
+import { BookOpen, Check, Lightbulb, Pencil, Quote, Share2, ShieldAlert, Sparkles, Square, Trash2, X, PlusCircle, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { getArticle, loadIdeas, updateArticle, type Idea } from "@/lib/ideas";
@@ -189,13 +189,19 @@ export function ArticleEditor({ idea, online, onChange, onDelete }: {
 
             {enrichTab === "quotes" && (
               <div className="space-y-3">
+                <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                  هذه الاقتباسات مولّدة بالذكاء الاصطناعي وغير موثّقة من المصادر — تحقق منها قبل الاستشهاد بها.
+                </p>
                 {enrichment.quotes?.length ? enrichment.quotes.map((q, idx) => (
                   <div key={idx} className="rounded-xl border border-border bg-card p-3.5 space-y-2">
                     <p className="font-article text-lg leading-relaxed text-foreground">
                       «{q.quote}»
                     </p>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/50">
-                      <span className="font-semibold text-primary">{q.author}</span>
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground pt-1 border-t border-border/50">
+                      <span className="flex items-center gap-2 shrink-0">
+                        <span className="font-semibold text-primary">{q.author}</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400"><ShieldAlert className="size-3.5" />غير موثّق</span>
+                      </span>
                       <span className="truncate max-w-[220px]" title={q.context}>{q.context}</span>
                     </div>
                     <Button

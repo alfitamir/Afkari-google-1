@@ -1,6 +1,3 @@
-import { apiHeaders } from "./gemini";
-import { sanitizeAdditions } from "./ai-prompts";
-
 export function parseImprovedArticle(text: string): { title: string; body: string } {
   const lines = text.trim().split("\n");
   const title = (lines.shift() ?? "").replace(/^[#*\s]+|[*\s]+$/g, "");
@@ -84,7 +81,7 @@ export function isMergeComplete(sources: string[], output: string): boolean {
   });
 }
 
-export type Engine = { kind: "gemini"; key: string } | { kind: "cloud"; token: string } | { kind: "server" };
+export type Engine = { kind: "gemini"; key: string } | { kind: "server" };
 
 export type ArticleEnrichment = {
   additions: string[];
@@ -108,7 +105,7 @@ export async function improveFull(
     const response = await fetch("/api/gemini/polish", {
       method: "POST",
       signal,
-      headers: apiHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -128,18 +125,8 @@ export async function improveFull(
   for (let i = 0; i < chunks.length; i++) {
     const payload = { title: article.title, body: chunks[i], original: chunks.length > 1 ? "" : original.slice(0, 40000), samples };
     const show = (t: string) => onText([...parts, t].join("\n\n"));
-    let text: string;
-    if (engine.kind === "gemini") {
-      const { geminiStream, IMPROVE_INSTRUCTIONS } = await import("./gemini");
-      text = await geminiStream(engine.key, IMPROVE_INSTRUCTIONS, JSON.stringify(payload), signal, show);
-    } else {
-      const response = await fetch("/api/articles/improve", {
-        method: "POST", signal,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${engine.token}` },
-        body: JSON.stringify(payload),
-      });
-      text = await readArticleStream(response, show);
-    }
+    const { geminiStream, IMPROVE_INSTRUCTIONS } = await import("./gemini");
+    const text = await geminiStream(engine.key, IMPROVE_INSTRUCTIONS, JSON.stringify(payload), signal, show);
     const out = parseImprovedArticle(text);
     if (!isComplete(chunks[i] ?? "", out.body)) throw new Error(INCOMPLETE);
     if (i === 0) title = out.title;
@@ -156,13 +143,13 @@ export async function getArticleEnrichment(
   const response = await fetch("/api/gemini/suggest-additions", {
     method: "POST",
     signal,
-    headers: apiHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(article),
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.error || "تعذّر جلب مقترحات الإثراء والاقتباسات");
   }
-  return sanitizeAdditions(await response.json());
+  return await response.json();
 }
 
