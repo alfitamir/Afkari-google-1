@@ -1,3 +1,5 @@
+# never commit personal backups or AI Studio exports
+public/assets/aistudio/
 node_modules/
 build/
 dist/

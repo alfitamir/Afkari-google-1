@@ -59,9 +59,9 @@ describe("mergeIdeas", () => {
 });
 
 describe("storage lifecycle", () => {
-  it("seeds bundled ideas on first load", () => {
-    expect(INITIAL_IDEAS.length).toBeGreaterThan(0);
-    expect(loadIdeas().length).toBe(INITIAL_IDEAS.length);
+  it("ships an empty seed, so first load starts with no ideas", () => {
+    expect(INITIAL_IDEAS).toHaveLength(0);
+    expect(loadIdeas()).toHaveLength(0);
   });
   it("saveIdea puts new ideas first and persists them", () => {
     const saved = saveIdea("فكرة جديدة");
@@ -73,8 +73,8 @@ describe("storage lifecycle", () => {
     expect(loadIdeas().some((i) => i.id === saved.id)).toBe(false);
     expect(loadDeleted()).toContain(saved.id);
   });
-  it("a seeded idea deleted by the user stays deleted after a reseed", () => {
-    const victim = loadIdeas()[0];
+  it("a deleted idea stays deleted after a reseed", () => {
+    const victim = saveIdea("فكرة للاختبار");
     deleteIdea(victim.id);
     localStorage.removeItem("afkari.seed.version");
     expect(loadIdeas().some((i) => i.id === victim.id)).toBe(false);
