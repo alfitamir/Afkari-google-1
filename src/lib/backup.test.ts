@@ -9,9 +9,9 @@ describe("backup", () => {
   it("round-trips ideas", () => {
     expect(parseBackup(buildBackup(sample))).toEqual(sample);
   });
-  it("accepts the real exported backup shipped with the repo", () => {
-    const raw = readFileSync("public/assets/aistudio/afkari-backup-2026-10-26__2__d652e27a.json", "utf8");
-    expect(parseBackup(raw).length).toBeGreaterThan(30);
+  it("accepts a wrapped exported backup (synthetic fixture)", () => {
+    const raw = readFileSync("src/test/fixtures/sample-backup.json", "utf8");
+    expect(parseBackup(raw)).toHaveLength(3);
   });
   it("accepts a bare array of ideas", () => {
     expect(parseBackup(JSON.stringify(sample))).toHaveLength(1);
