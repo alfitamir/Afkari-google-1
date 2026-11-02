@@ -85,6 +85,12 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
   }
 };
 
+/** Drop the in-memory token after Google rejects it (it lasts about an hour). */
+export const expireGoogleAccessToken = () => {
+  cachedAccessToken = null;
+  notifyListeners();
+};
+
 export const getGoogleAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
 };
