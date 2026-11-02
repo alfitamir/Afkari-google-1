@@ -4,7 +4,7 @@ import {
   type AskAnswer, type AskArticle, type ClassifyItem, type InsightItem, type Insights, type Label,
 } from "./ai-prompts";
 import { verifyAll, type EvidenceResult } from "./evidence";
-import { getGeminiKey, geminiStream } from "./gemini";
+import { apiHeaders, getGeminiKey, geminiStream } from "./gemini";
 import { classify, getArticle, strip, type Idea } from "./ideas";
 
 /** Every feature runs on the user's own Gemini key when saved in Settings, otherwise on the app server. */
@@ -15,7 +15,7 @@ const signalOf = (o: AIOptions) => o.signal ?? new AbortController().signal;
 async function server<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`/api/gemini/${path}`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    res = await fetch(`/api/gemini/${path}`, { method: "POST", signal, headers: apiHeaders(), body: JSON.stringify(body) });
   } catch (error) {
     if (signal.aborted) throw error;
     throw new Error("تعذّر الوصول إلى الخادم. تأكد من الإنترنت وحاول مرة أخرى.");

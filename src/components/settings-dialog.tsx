@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, KeyRound, Trash2, Upload, BookOpen, Sparkles, CheckCircle2, ChevronDown, Cloud, RefreshCw, HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { getGeminiKey, setGeminiKey, testGeminiKey } from "@/lib/gemini";
+import { getApiToken, getGeminiKey, setApiToken, setGeminiKey, testGeminiKey } from "@/lib/gemini";
 import { buildBackup, parseBackup, restoreBackup } from "@/lib/backup";
 import { loadIdeas } from "@/lib/ideas";
 import { getGoogleUser, signInWithGoogle, onGoogleAuthStateChange } from "@/lib/google-auth";
@@ -13,6 +13,9 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const [saved, setSaved] = useState(false);
   const [draft, setDraft] = useState("");
   const [keyMsg, setKeyMsg] = useState("");
+  const [tokenSaved, setTokenSaved] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [tokenMsg, setTokenMsg] = useState("");
   const [testing, setTesting] = useState(false);
   const [backupMsg, setBackupMsg] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
@@ -20,7 +23,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const [driveSyncing, setDriveSyncing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { if (open) { setSaved(!!getGeminiKey()); setDraft(""); setKeyMsg(""); setBackupMsg(""); } }, [open]);
+  useEffect(() => { if (open) { setSaved(!!getGeminiKey()); setDraft(""); setKeyMsg(""); setBackupMsg(""); setTokenSaved(!!getApiToken()); setTokenDraft(""); setTokenMsg(""); } }, [open]);
 
   const saveKey = async () => {
     const key = draft.trim();
@@ -33,6 +36,14 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     setKeyMsg(error ? `حُفظ المفتاح، لكن: ${error}` : "المفتاح يعمل ✓ الضبط والدمج سيستخدمان Gemini الخاص بك.");
   };
   const removeKey = () => { setGeminiKey(""); setSaved(false); setKeyMsg("حُذف المفتاح من هذا الهاتف."); };
+
+  const saveToken = () => {
+    const token = tokenDraft.trim();
+    if (!token) return;
+    setApiToken(token); setTokenSaved(true); setTokenDraft("");
+    setTokenMsg("حُفظ رمز الوصول ✓ ستستخدمه طلبات الذكاء الاصطناعي عبر الخادم.");
+  };
+  const removeToken = () => { setApiToken(""); setTokenSaved(false); setTokenMsg("حُذف رمز الوصول من هذا الجهاز."); };
 
   const exportBackup = async () => {
     setBackupMsg("");
@@ -78,7 +89,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           </span>
         </div>
         <p className="text-sm text-muted-foreground">
-          التطبيق متصل الآن مباشرة بنموذج Gemini 3.8 Flash لضبط المقالات لغوياً وهيكلياً على أسلوبك، واقتراح دمج المقالات المتكاملة، وتوليد إضافات واقتباسات فكرية.
+          التطبيق متصل الآن مباشرة بنموذج Gemini Flash لضبط المقالات لغوياً وهيكلياً على أسلوبك، واقتراح دمج المقالات المتكاملة، وتوليد إضافات واقتباسات فكرية.
         </p>
         <p className="text-xs text-muted-foreground">
           (اختياري): يمكنك حفظ مفتاح API شخصي إضافي إذا أردت استخدام حسابك المباشر.
@@ -91,6 +102,20 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           {saved && <Button variant="ghost" className="text-destructive" onClick={removeKey}><Trash2 />حذف المفتاح المخصص</Button>}
         </div>
         {keyMsg && <p role="status" className="break-words text-sm text-muted-foreground">{keyMsg}</p>}
+        <div className="space-y-2 border-t border-border/60 pt-3">
+          <p className="text-sm font-medium">رمز الوصول إلى الخادم (اختياري)</p>
+          <p className="text-xs text-muted-foreground">
+            إذا كان خادم التطبيق محميًا برمز وصول، ضعه هنا حتى تعمل مزايا الذكاء الاصطناعي عبر الخادم. يُحفظ على هذا الجهاز فقط.
+          </p>
+          {tokenSaved && <p className="text-sm text-primary">✓ يوجد رمز وصول محفوظ على هذا الجهاز</p>}
+          <input type="password" aria-label="رمز الوصول إلى الخادم" placeholder={tokenSaved ? "ضع رمزًا جديدًا لاستبداله" : "الصق رمز الوصول هنا (اختياري)"} value={tokenDraft} onChange={(e) => setTokenDraft(e.target.value)}
+            dir="ltr" autoComplete="off" className="w-full rounded-md border border-input bg-card px-3 py-2 outline-none focus:ring-2 focus:ring-ring" />
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={saveToken} disabled={!tokenDraft.trim()}><KeyRound />حفظ رمز الوصول</Button>
+            {tokenSaved && <Button variant="ghost" className="text-destructive" onClick={removeToken}><Trash2 />حذف رمز الوصول</Button>}
+          </div>
+          {tokenMsg && <p role="status" className="break-words text-sm text-muted-foreground">{tokenMsg}</p>}
+        </div>
       </section>
 
       <section className="space-y-3 border-t border-border pt-4">

@@ -12,6 +12,8 @@ export const GEMINI_MODELS = [
   { name: "gemini-3.6-flash", thinkingLevel: "low" },
   { name: "gemini-3-flash-preview", thinkingLevel: "low" },
   { name: "gemini-flash-lite-latest", thinkingLevel: "minimal" },
+  // stable fallback if preview names disappear
+  { name: "gemini-2.5-flash", thinkingLevel: "low" },
 ] as const;
 /** Max wait for the first chunk / between chunks before trying the next model. */
 const FIRST_CHUNK_MS = 25000, IDLE_MS = 30000;
@@ -23,6 +25,24 @@ export const setGeminiKey = (key: string) => {
   const k = key.replace(/\s+/g, "").replace(/^["']|["']$/g, "");
   if (k) localStorage.setItem(KEY, k); else localStorage.removeItem(KEY);
   window.dispatchEvent(new Event("afkari:settings-changed"));
+};
+
+// Optional access token for a self-hosted server that sets AFKARI_API_TOKEN.
+// Stored only on this device, exactly like the personal Gemini key above.
+const API_TOKEN_KEY = "afkari.apiToken";
+export const getApiToken = (): string => {
+  try { return localStorage.getItem(API_TOKEN_KEY)?.trim() ?? ""; } catch { return ""; }
+};
+export const setApiToken = (token: string) => {
+  const t = token.trim();
+  if (t) localStorage.setItem(API_TOKEN_KEY, t); else localStorage.removeItem(API_TOKEN_KEY);
+  window.dispatchEvent(new Event("afkari:settings-changed"));
+};
+
+/** Headers for calls to the app server: JSON, plus the access token when one is saved. */
+export const apiHeaders = (): Record<string, string> => {
+  const token = getApiToken();
+  return { "Content-Type": "application/json", ...(token ? { "x-afkari-token": token } : {}) };
 };
 
 export const IMPROVE_INSTRUCTIONS = `أنت محرر فكري وأدبي أمين لصوت الكاتب وأسلوبه الخاص. مهمتك ضبط المقال وتعديله وصقله ليعبر تماماً عن هوية الكاتب وأسلوبه وفق القواعد التالية:
