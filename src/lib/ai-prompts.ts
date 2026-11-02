@@ -194,6 +194,40 @@ export function sanitizeEvidence(raw: unknown): EvidenceCandidate[] {
   return out;
 }
 
+// ---------- article enrichment (suggest-additions) ----------
+export type ArticleAdditions = {
+  additions: string[];
+  quotes: { quote: string; author: string; context: string }[];
+  questions: string[];
+};
+
+const stringList = (v: unknown, maxItems: number, maxChars: number): string[] =>
+  (Array.isArray(v) ? v : [])
+    .filter((s): s is string => typeof s === "string")
+    .map((s) => s.trim().slice(0, maxChars))
+    .filter(Boolean)
+    .slice(0, maxItems);
+
+/** Model output is never trusted: keep only well-shaped, bounded strings; anything else becomes empty arrays. */
+export function sanitizeAdditions(raw: unknown): ArticleAdditions {
+  const r = (raw ?? {}) as { additions?: unknown; quotes?: unknown; questions?: unknown };
+  const quotes = (Array.isArray(r.quotes) ? r.quotes : []).flatMap((q: any) => {
+    if (!q || typeof q !== "object") return [];
+    const quote = typeof q.quote === "string" ? q.quote.trim().slice(0, 500) : "";
+    if (!quote) return [];
+    return [{
+      quote,
+      author: typeof q.author === "string" ? q.author.trim().slice(0, 100) : "",
+      context: typeof q.context === "string" ? q.context.trim().slice(0, 300) : "",
+    }];
+  }).slice(0, 8);
+  return {
+    additions: stringList(r.additions, 10, 500),
+    quotes,
+    questions: stringList(r.questions, 10, 300),
+  };
+}
+
 // ---------- merge suggestions ----------
 export const MERGE_SUGGEST_INSTRUCTIONS = `أنت محرر فكري يقرأ مجموعة مقالات لكاتب واحد (معرّف، عنوان، بداية المقال ونهايته) ويبحث عن مقالات يصنع دمجها مقالًا أقوى من كل منها منفردًا.
 

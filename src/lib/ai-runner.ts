@@ -4,7 +4,11 @@
  */
 
 /** Same fast-first chain the browser client uses; GEMINI_MODEL / GEMINI_MODELS prepend overrides. */
-export const DEFAULT_MODELS = ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-flash-lite-latest"];
+export const DEFAULT_MODELS = [
+  "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-flash-lite-latest",
+  // stable fallback if preview names disappear
+  "gemini-2.5-flash",
+];
 
 export function modelChain(env: { GEMINI_MODEL?: string; GEMINI_MODELS?: string } = {}): string[] {
   const extra = [env.GEMINI_MODEL, ...(env.GEMINI_MODELS?.split(",") ?? [])].map((m) => m?.trim()).filter((m): m is string => !!m);

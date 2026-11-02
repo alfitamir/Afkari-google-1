@@ -1,6 +1,6 @@
 import { getArticle, type Idea } from "./ideas";
 import { INCOMPLETE, isMergeComplete, parseImprovedArticle } from "./article-ai";
-import { geminiStream, MERGE_INSTRUCTIONS } from "./gemini";
+import { apiHeaders, geminiStream, MERGE_INSTRUCTIONS } from "./gemini";
 import { MERGE_SUGGEST_INSTRUCTIONS, MERGE_SUGGEST_SCHEMA } from "./ai-prompts";
 
 export type MergeSuggestion = { ids: string[]; title: string; reason: string; thesis?: string; strength?: number };
@@ -74,7 +74,7 @@ export async function findMerges(ideas: Idea[], signal?: AbortSignal, key?: stri
   try {
     const res = await fetch("/api/gemini/suggest-merges", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders(),
       signal,
       body: JSON.stringify({ articles: list }),
     });
@@ -103,7 +103,7 @@ export async function mergeArticles(
   onText("جارٍ تحليل ودمج المقالات بأسلوبك الفكري الموحد عبر Gemini…");
   const res = await fetch("/api/gemini/merge", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     signal,
     body: JSON.stringify({ articles: sources }),
   });

@@ -1,3 +1,6 @@
+import { apiHeaders } from "./gemini";
+import { sanitizeAdditions } from "./ai-prompts";
+
 export function parseImprovedArticle(text: string): { title: string; body: string } {
   const lines = text.trim().split("\n");
   const title = (lines.shift() ?? "").replace(/^[#*\s]+|[*\s]+$/g, "");
@@ -105,7 +108,7 @@ export async function improveFull(
     const response = await fetch("/api/gemini/polish", {
       method: "POST",
       signal,
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders(),
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -153,13 +156,13 @@ export async function getArticleEnrichment(
   const response = await fetch("/api/gemini/suggest-additions", {
     method: "POST",
     signal,
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body: JSON.stringify(article),
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.error || "تعذّر جلب مقترحات الإثراء والاقتباسات");
   }
-  return await response.json();
+  return sanitizeAdditions(await response.json());
 }
 

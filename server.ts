@@ -9,10 +9,10 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { createHash } from 'crypto';
 import dotenv from 'dotenv';
-import { parseImprovedArticle } from './src/lib/article-ai';
+import { isComplete, isMergeComplete, parseImprovedArticle } from './src/lib/article-ai';
 import {
   ASK_INSTRUCTIONS, ASK_SCHEMA, MERGE_SUGGEST_INSTRUCTIONS, MERGE_SUGGEST_SCHEMA, CLASSIFY_INSTRUCTIONS, CLASSIFY_SCHEMA, INSIGHTS_INSTRUCTIONS, INSIGHTS_SCHEMA,
-  TRANSCRIBE_INSTRUCTIONS, EVIDENCE_INSTRUCTIONS, EVIDENCE_SCHEMA, sanitizeAsk, sanitizeEvidence, sanitizeInsights, sanitizeLabels,
+  TRANSCRIBE_INSTRUCTIONS, EVIDENCE_INSTRUCTIONS, EVIDENCE_SCHEMA, sanitizeAdditions, sanitizeAsk, sanitizeEvidence, sanitizeInsights, sanitizeLabels,
 } from './src/lib/ai-prompts';
 import { classify } from './src/lib/topics';
 import { createCache, createRateLimiter, GeminiError, modelChain, runWithFallback } from './src/lib/ai-runner';
@@ -23,7 +23,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+// Behind a proxy or load balancer (e.g. Cloud Run), trust X-Forwarded-For so that
+// req.ip — and therefore the per-IP rate limit below — sees the real client IP.
+const trustProxy = process.env.TRUST_PROXY?.trim();
+if (trustProxy) {
+  app.set('trust proxy', trustProxy === 'true' ? true : /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+}
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -71,6 +78,19 @@ async function gen(params: GenParams): Promise<{ text: string }> {
     run.then((t) => resultCache.set(key, t)).catch(() => {}).finally(() => inflight.delete(key));
   }
   return { text: await run };
+}
+
+// Optional shared-secret gate. When AFKARI_API_TOKEN is set, every Gemini endpoint
+// requires the same token in the `x-afkari-token` header (users save it once in Settings).
+// Checked first, before the rate limiter and the Gemini-key gate.
+const API_TOKEN = process.env.AFKARI_API_TOKEN?.trim();
+if (API_TOKEN) {
+  app.use('/api/gemini', (req: Request, res: Response, next) => {
+    if (req.get('x-afkari-token') !== API_TOKEN) {
+      return res.status(401).json({ error: 'رمز الوصول إلى الخادم مطلوب أو غير صحيح. أضفه من الإعدادات ⚙️.' });
+    }
+    next();
+  });
 }
 
 // Per-IP limit so one client cannot burn the shared Gemini quota.
@@ -158,7 +178,11 @@ app.post('/api/gemini/polish', async (req: Request, res: Response) => {
       return res.status(413).json({ error: 'المقال أطول من الحد المسموح' });
     }
 
-    const prompt = `المقال الحالي المراد تحسينه وضبطه:\nالعنوان: ${title || 'بدون عنوان'}\n\nالنص:\n${body}\n\nالنص الأصلي المسجل:\n${original || body}\n\nعينات من أسلوب الكاتب للاسترشاد بنبرته ومفرداته:\n${(samples || []).join('\n---\n')}`;
+    // Bound the supporting context server-side too (the client already slices, but don't trust it).
+    const clippedOriginal = typeof original === 'string' ? original.slice(0, 40_000) : original;
+    const clippedSamples = (Array.isArray(samples) ? samples : []).slice(0, 3).map((s: unknown) => String(s ?? '').slice(0, 5_000));
+
+    const prompt = `المقال الحالي المراد تحسينه وضبطه:\nالعنوان: ${title || 'بدون عنوان'}\n\nالنص:\n${body}\n\nالنص الأصلي المسجل:\n${clippedOriginal || body}\n\nعينات من أسلوب الكاتب للاسترشاد بنبرته ومفرداته:\n${clippedSamples.join('\n---\n')}`;
 
     const response = await gen({
       contents: prompt,
@@ -168,6 +192,10 @@ app.post('/api/gemini/polish', async (req: Request, res: Response) => {
     });
 
     const { title: newTitle, body: newBody } = parseImprovedArticle(response.text || '');
+    // Same completeness guard the client applies: a truncated rewrite must never reach the user as if complete.
+    if (!isComplete(body, newBody)) {
+      return res.status(422).json({ error: 'النتيجة غير مكتملة ولا تغطي المقال كاملًا؛ لم يتغير مقالك الأصلي. حاول مرة أخرى.' });
+    }
     return res.json({ title: newTitle || title, body: newBody });
   } catch (error: any) {
     console.error('Error polishing article:', error);
@@ -204,9 +232,15 @@ app.post('/api/gemini/merge', async (req: Request, res: Response) => {
     if (!Array.isArray(articles) || articles.length < 2) {
       return res.status(400).json({ error: 'يلزم مقالان على الأقل للدمج' });
     }
+    if (articles.length > 10) {
+      return res.status(400).json({ error: 'لا يمكن دمج أكثر من 10 مقالات في مرة واحدة' });
+    }
+
+    // Clip each source before prompting; the completeness guard below compares against these same texts.
+    const sourceBodies = articles.map((a: any) => String(a?.body || a?.text || '').slice(0, 20_000));
 
     const prompt = `ادمج المقالات التالية في مقال تحليلي واحد متماسك بأسلوب الكاتب:\n\n${articles
-      .map((a: any, idx: number) => `--- المقال ${idx + 1}: ${a.title} ---\n${a.body || a.text}`)
+      .map((a: any, idx: number) => `--- المقال ${idx + 1}: ${a.title} ---\n${sourceBodies[idx]}`)
       .join('\n\n')}`;
 
     const response = await gen({
@@ -216,7 +250,11 @@ app.post('/api/gemini/merge', async (req: Request, res: Response) => {
       },
     });
 
-    return res.json(parseImprovedArticle(response.text || ''));
+    const merged = parseImprovedArticle(response.text || '');
+    if (!isMergeComplete(sourceBodies, merged.body)) {
+      return res.status(422).json({ error: 'النتيجة غير مكتملة ولا تغطي المقالات الأصلية كاملة؛ لم يتغير شيء في مقالاتك. حاول مرة أخرى.' });
+    }
+    return res.json(merged);
   } catch (error: any) {
     console.error('Error merging articles:', error);
     return res.status(500).json({ error: error?.message || 'تعذّر دمج المقالات عبر Gemini' });
@@ -230,8 +268,11 @@ app.post('/api/gemini/suggest-additions', async (req: Request, res: Response) =>
     if (!body || typeof body !== 'string') {
       return res.status(400).json({ error: 'نص المقال مطلوب' });
     }
+    if (body.length > 50_000) {
+      return res.status(413).json({ error: 'المقال أطول من الحد المسموح' });
+    }
 
-    const prompt = `بناءً على المقال التالي للكاتب، اقترح إضافات فكرية واقتباسات ملهمة لتعميق المقال:\nالعنوان: ${title}\n\nالنص:\n${body}`;
+    const prompt = `بناءً على المقال التالي للكاتب، اقترح إضافات فكرية واقتباسات ملهمة لتعميق المقال:\nالعنوان: ${clip(title, 200)}\n\nالنص:\n${body}`;
 
     const response = await gen({
       contents: prompt,
@@ -276,7 +317,7 @@ app.post('/api/gemini/suggest-additions', async (req: Request, res: Response) =>
     });
 
     const parsed = JSON.parse(response.text || '{}');
-    return res.json(parsed);
+    return res.json(sanitizeAdditions(parsed));
   } catch (error: any) {
     console.error('Error suggesting additions:', error);
     return res.status(500).json({ error: error?.message || 'تعذّر توليد الاقتراحات عبر Gemini' });

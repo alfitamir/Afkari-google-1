@@ -48,7 +48,7 @@ checks it matches those opening words (`src/lib/evidence.ts`):
 ## Server reliability
 
 `src/lib/ai-runner.ts` wraps every Gemini call: model fallback chain (`GEMINI_MODEL` / `GEMINI_MODELS` first, then
-`gemini-3.6-flash → gemini-3-flash-preview → gemini-flash-lite-latest`), retry with backoff, per-call timeout, Arabic error messages,
+`gemini-3.6-flash → gemini-3-flash-preview → gemini-flash-lite-latest → gemini-2.5-flash` as a stable fallback), retry with backoff, per-call timeout, Arabic error messages,
 a 1-hour cache for structured results with shared in-flight requests, and a 40 requests/minute/IP limit.
 
 Prompts, schemas and output sanitizers live in `src/lib/ai-prompts.ts` and are shared by server and browser.
@@ -66,3 +66,17 @@ Model output is never trusted: unknown ids, invented topics and empty answers ar
 ## Data & privacy
 
 Ideas live in `localStorage` first. Optional cloud sync is Google Drive only: sign in with Google and the app keeps `afkari-backup.json` in your own Drive (drive.file scope, so it sees no other files). Without signing in the app runs fully offline.
+
+## Deployment & security notes
+
+Afkari needs its Express server (`server.ts`) running as a **long-lived process** — it is not a static site, because the
+`/api/gemini/*` endpoints (and the server's `GEMINI_API_KEY`) live server-side. Static hosting alone cannot run the AI features.
+
+- The server listens on the `PORT` environment variable (default 3000).
+- A `Dockerfile` is included (Bun-based). On Cloud Run, either set the container port to 3000 or pass the platform's port via `PORT`.
+- **Before exposing a deployment publicly, set `AFKARI_API_TOKEN`.** Without it, anyone who knows the URL can call the AI
+  endpoints and spend the server's Gemini quota (only a 40 requests/minute/IP limit applies). Users enter the token once in
+  Settings → it is stored only on their own device and sent as an `x-afkari-token` header.
+- Behind a proxy or load balancer, set `TRUST_PROXY` so the per-IP rate limit sees real client IPs.
+- Server-side completeness guards run on `/api/gemini/polish` and `/api/gemini/merge`: a truncated rewrite is rejected
+  with HTTP 422 instead of being returned as if complete.
