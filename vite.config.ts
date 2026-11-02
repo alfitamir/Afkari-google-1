@@ -18,7 +18,6 @@ export default defineConfig(() => {
           codeSplitting: {
             groups: [
               { name: 'firebase', test: /node_modules[\\/](@firebase|firebase)[\\/]/, priority: 30 },
-              { name: 'supabase', test: /node_modules[\\/]@supabase[\\/]/, priority: 30 },
               { name: 'router', test: /node_modules[\\/]@tanstack[\\/]/, priority: 20 },
               { name: 'vendor', test: /node_modules[\\/]/, priority: 10 },
             ],

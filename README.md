@@ -65,5 +65,4 @@ Model output is never trusted: unknown ids, invented topics and empty answers ar
 
 ## Data & privacy
 
-Ideas live in `localStorage` first. Optional sync targets: Google Drive (`afkari-backup.json`) and Supabase.
-Set `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` to enable Supabase; without them the app runs fully offline.
+Ideas live in `localStorage` first. Optional cloud sync is Google Drive only: sign in with Google and the app keeps `afkari-backup.json` in your own Drive (drive.file scope, so it sees no other files). Without signing in the app runs fully offline.

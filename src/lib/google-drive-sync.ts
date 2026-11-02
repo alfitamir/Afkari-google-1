@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getGoogleAccessToken } from './google-auth';
+import { getGoogleAccessToken, expireGoogleAccessToken } from './google-auth';
 import { clearDeleted, loadDeleted, loadIdeas, mergeIdeas, replaceIdeas, type Idea } from './ideas';
 
 const BACKUP_FILE_NAME = 'afkari-backup.json';
@@ -19,6 +19,8 @@ export interface DriveSyncResult {
   fileId?: string;
   timestamp?: number;
 }
+
+const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 let lastSyncTimestamp: number | null = null;
 export const getLastDriveSyncTime = (): number | null => lastSyncTimestamp;
@@ -82,7 +84,7 @@ async function downloadBackupContent(fileId: string, accessToken: string): Promi
   });
 
   if (!response.ok) {
-    throw new Error('تعذّر تنزيل ملف المقالات من Google Drive');
+    throw httpError(response.status, 'تعذّر تنزيل ملف المقالات من Google Drive');
   }
 
   const text = await response.text();
@@ -129,7 +131,7 @@ async function createBackupFile(ideas: Idea[], accessToken: string): Promise<str
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
     const message = errBody?.error?.message || `خطأ (${response.status})`;
-    throw new Error(`تعذّر إنشاء ملف النسخة الاحتياطية على Google Drive: ${message}`);
+    throw httpError(response.status, `تعذّر إنشاء ملف النسخة الاحتياطية على Google Drive: ${message}`);
   }
 
   const data = await response.json();
@@ -155,14 +157,42 @@ async function updateBackupFile(fileId: string, ideas: Idea[], accessToken: stri
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
     const message = errBody?.error?.message || `خطأ (${response.status})`;
-    throw new Error(`تعذّر تحديث الملف على Google Drive: ${message}`);
+    throw httpError(response.status, `تعذّر تحديث الملف على Google Drive: ${message}`);
   }
 }
 
 /**
  * Performs full two-way sync: merges Drive articles with local storage and pushes merged result
  */
-export async function syncWithGoogleDrive(): Promise<DriveSyncResult> {
+let inFlight: Promise<DriveSyncResult> | null = null;
+let rerun = false;
+
+/**
+ * Single-flight: overlapping calls share one run (plus one follow-up run if a
+ * change arrived meanwhile), so two syncs can never both create the backup file.
+ */
+export function syncWithGoogleDrive(): Promise<DriveSyncResult> {
+  if (inFlight) {
+    rerun = true;
+    return inFlight;
+  }
+  inFlight = (async () => {
+    try {
+      let result = await runDriveSync();
+      while (rerun && result.success) {
+        rerun = false;
+        result = await runDriveSync();
+      }
+      return result;
+    } finally {
+      rerun = false;
+      inFlight = null;
+    }
+  })();
+  return inFlight;
+}
+
+async function runDriveSync(): Promise<DriveSyncResult> {
   const token = await getGoogleAccessToken();
   if (!token) {
     return {
@@ -222,6 +252,15 @@ export async function syncWithGoogleDrive(): Promise<DriveSyncResult> {
     };
   } catch (error: any) {
     console.warn('Google Drive sync notice:', error?.message);
+    if (error?.status === 401) {
+      expireGoogleAccessToken();
+      return {
+        success: false,
+        message: 'انتهت صلاحية جلسة Google. سجّل الدخول مرة أخرى لمتابعة المزامنة.',
+        restoredCount: 0,
+        uploadedCount: 0,
+      };
+    }
     return {
       success: false,
       message: error?.message || 'تعذّرت المزامنة مع Google Drive حالياً.',
